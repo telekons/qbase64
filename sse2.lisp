@@ -1,7 +1,8 @@
 (in-package :qbase64)
 
-(defun char- (character offset)
-  (- (char-code character) offset))
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (defun char- (character offset)
+    (- (char-code character) offset)))
 
 (defconstant +encode-shift-lut+
   (sse:setr-pi8
@@ -30,8 +31,7 @@
                            1 2 0 1)))
     (loop for i of-type positive-fixnum from start below end by 12
           for output-position of-type positive-fixnum from 0 by 16
-          do (print i)
-             (let* ((raw-in (sse:mem-ref-pi input-storage i))
+          do (let* ((raw-in (sse:mem-ref-pi input-storage i))
                     (in (sse:shuffle-pi8 raw-in shuf))
                     (t0 (sse:and-pi     in (sse:set1-pi32 #x0fc0fc00)))
                     (t1 (sse:mulhi-pu16 t0 (sse:set1-pi32 #x04000040)))
@@ -55,8 +55,9 @@
       0    0    0    0
       0    0    0    0))
 
-(defun 8- (a b)
-  (ldb (byte 8 0) (- a b)))
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (defun 8- (a b)
+    (ldb (byte 8 0) (- a b))))
 
 (defconstant +decode-shift-lut+
   (sse:setr-pi8

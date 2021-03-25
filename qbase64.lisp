@@ -69,58 +69,65 @@
   (declare (type scheme scheme))
   (declare (type positive-fixnum start1 end1 start2 end2))
   (declare (optimize (speed 3) (safety 0) (space 0)))
-  #+use-qbase64-sse2
-  (when (and (eq scheme :original)
-             (zerop start2)
-             (= end2 (length string))
-             (typep string 'simple-base-string)
-             (typep bytes  '(simple-array (unsigned-byte 8) 1)))
-    (let ((sse2-end (* 12 (floor end1 12))))
-      (when (>= sse2-end (- end1 12))
-        ;; Make sure we aren't going to try to process the end of the string.
-        (decf sse2-end 12))
-      (when (plusp sse2-end)
-        (%sse2-encode bytes string start1 sse2-end))
-      (setf start1 sse2-end
-            start2 (* 4 (floor sse2-end 3)))))
-  (let ((set (ecase scheme
-               (:original +original-set+)
-               (:uri +uri-set+))))
-    (declare (type simple-base-string set))
-    (flet ((encode-byte (byte)
-             (char set (logand #o77 byte))))
-      (declare (inline encode-byte))
-      (loop
-         with length1 of-type positive-fixnum = (- end1 start1)
-         with length2 of-type positive-fixnum = (- end2 start2)
-         with count1 = (multiple-value-bind (count rem)
-                           (floor length1 3)
-                         (if encode-trailing-bytes
-                             (if (plusp rem) (1+ count) count)
-                             count))
-         with count2 = (floor length2 4)
-         for n of-type positive-fixnum below (min count1 count2)
-         for i1 of-type positive-fixnum from start1 by 3
-         for i2 of-type positive-fixnum from start2 by 4
-         for two-missing = (= (- end1 i1) 1)
-         for one-missing = (or two-missing (= (- end1 i1) 2))
-         for b1 of-type (unsigned-byte 8) = (aref bytes i1)
-         for b2 of-type (unsigned-byte 8) = (if two-missing 0 (aref bytes (+ i1 1)))
-         for b3 of-type (unsigned-byte 8) =  (if one-missing 0 (aref bytes (+ i1 2)))
-         do (setf (char string i2)        (encode-byte (ash b1 -2))
-                  (char string (+ i2 1))  (encode-byte
-                                           (logior (ash b1 4) (ash b2 -4)))
-                  (char string (+ i2 2))  (encode-byte
-                                           (logior (ash b2 2) (ash b3 -6)))
-                  (char string (+ i2 3)) (encode-byte b3))
-         finally
-           (when one-missing
-             (setf (char string (+ i2 3)) +pad-char+)
-             (when two-missing
-               (setf (char string (+ i2 2)) +pad-char+)))
-           (return (the (values positive-fixnum positive-fixnum)
-                        (values (min (+ start1 (* n 3)) end1)
-                                (+ start2 (* n 4)))))))))
+  (let ((serial-start1 start1)
+        (serial-start2 start2)
+        (vector-processed-bytes 0))
+    #+use-qbase64-sse2
+    (when (and (eq scheme :original)
+               (zerop start2)
+               (= end2 (length string))
+               (typep string 'simple-base-string)
+               (typep bytes  '(simple-array (unsigned-byte 8) 1)))
+      (let ((sse2-end (* 12 (floor end1 12))))
+        (when (>= sse2-end (- end1 12))
+          ;; Make sure we aren't going to try to process the end of the string.
+          (decf sse2-end 12))
+        (when (plusp sse2-end)
+          (%sse2-encode bytes string start1 sse2-end)
+          (setf vector-processed-bytes (1+ (- sse2-end start1)))
+          (setf serial-start1 sse2-end
+                serial-start2 (* 4 (floor sse2-end 3))))))
+    (let ((set (ecase scheme
+                 (:original +original-set+)
+                 (:uri +uri-set+))))
+      (declare (type simple-base-string set))
+      (flet ((encode-byte (byte)
+               (char set (logand #o77 byte))))
+        (declare (inline encode-byte))
+        (loop
+          with length1 of-type positive-fixnum = (- end1 serial-start1)
+          with length2 of-type positive-fixnum = (- end2 serial-start2)
+          with count1 = (multiple-value-bind (count rem)
+                            (floor length1 3)
+                          (if encode-trailing-bytes
+                              (if (plusp rem) (1+ count) count)
+                              count))
+          with count2 = (floor length2 4)
+          for n of-type positive-fixnum below (min count1 count2)
+          for i1 of-type positive-fixnum from serial-start1 by 3
+          for i2 of-type positive-fixnum from serial-start2 by 4
+          for two-missing = (= (- end1 i1) 1)
+          for one-missing = (or two-missing (= (- end1 i1) 2))
+          for b1 of-type (unsigned-byte 8) = (aref bytes i1)
+          for b2 of-type (unsigned-byte 8) = (if two-missing 0 (aref bytes (+ i1 1)))
+          for b3 of-type (unsigned-byte 8) =  (if one-missing 0 (aref bytes (+ i1 2)))
+          do (setf (char string i2)        (encode-byte (ash b1 -2))
+                   (char string (+ i2 1))  (encode-byte
+                                            (logior (ash b1 4) (ash b2 -4)))
+                   (char string (+ i2 2))  (encode-byte
+                                            (logior (ash b2 2) (ash b3 -6)))
+                   (char string (+ i2 3)) (encode-byte b3))
+          finally
+             (when one-missing
+               (setf (char string (+ i2 3)) +pad-char+)
+               (when two-missing
+                 (setf (char string (+ i2 2)) +pad-char+)))
+             (return (the (values positive-fixnum positive-fixnum)
+                          (values (min (+ start1 (* n 3) vector-processed-bytes)
+                                       end1)
+                                  (+ start2
+                                     (* (floor vector-processed-bytes 3) 4)
+                                     (* n 4))))))))))
 (defstruct (encoder
              (:constructor %make-encoder))
   "Use an ENCODER to encode bytes to string. Create an encoder using
@@ -457,79 +464,81 @@ CLOSE is invoked."))
   (declare (type scheme scheme)
            (type positive-fixnum start1 end1 start2 end2))
   (declare (optimize (speed 3) (safety 0) (space 0)))
-  #+use-qbase64-sse2
-  (when (and (eq scheme :original)
-             (zerop start2)
-             (= end2 (length bytes))
-             (typep string 'simple-base-string)
-             (typep bytes  '(simple-array (unsigned-byte 8) 1)))
-    (let ((sse2-end (* 16 (floor end1 16))))
-      (when (>= sse2-end (- end1 16))
-        ;; Make sure we aren't going to try to process the end of the string.
-        (decf sse2-end 16))
-      (when (plusp sse2-end)
-        (%sse2-decode string bytes start1 sse2-end))
-      (setf start1 sse2-end
-            start2 (* 3 (/ sse2-end 4)))))
-  (let* ((reverse-set (ecase scheme
-                        (:original +original-reverse-set+)
-                        (:uri +uri-reverse-set+)))
-         (i1 start1)
-         (i2 start2))
-    (declare (type (simple-array (unsigned-byte 8)) reverse-set))
-    (declare (type positive-fixnum i1 i2))
-    (flet ((next-char ()
+  (let ((serial-start1 start1)
+        (serial-start2 start2))
+    #+use-qbase64-sse2
+    (when (and (eq scheme :original)
+               (zerop start2)
+               (= end2 (length bytes))
+               (typep string 'simple-base-string)
+               (typep bytes  '(simple-array (unsigned-byte 8) 1)))
+      (let ((sse2-end (* 16 (floor end1 16))))
+        (when (>= sse2-end (- end1 16))
+          ;; Make sure we aren't going to try to process the end of the string.
+          (decf sse2-end 16))
+        (when (plusp sse2-end)
+          (%sse2-decode string bytes start1 sse2-end))
+        (setf serial-start1 sse2-end
+              serial-start2 (* 3 (floor sse2-end 4)))))
+    (let* ((reverse-set (ecase scheme
+                          (:original +original-reverse-set+)
+                          (:uri +uri-reverse-set+)))
+           (i1 serial-start1)
+           (i2 serial-start2))
+      (declare (type (simple-array (unsigned-byte 8)) reverse-set))
+      (declare (type positive-fixnum i1 i2))
+      (flet ((next-char ()
+               (loop
+                 for char = (when (< i1 end1) (char string i1))
+                 do (incf i1)
+                 while (and char (whitespace-p char))
+                 finally (return char)))
+             (char-to-digit (char)
+               (declare (type (or null character) char))
+               (if char
+                   (let ((result (aref reverse-set (char-code char))))
+                     (if (= result 255)
+                         (error "Invalid input - ~s is not a base-64 character" char)
+                         result))
+                   0)))
+        (declare (inline next-char char-to-digit))
+        (the (values positive-fixnum positive-fixnum)
              (loop
-                for char = (when (< i1 end1) (char string i1))
-                do (incf i1)
-                while (and char (whitespace-p char))
-                finally (return char)))
-           (char-to-digit (char)
-             (declare (type (or null character) char))
-             (if char
-                 (let ((result (aref reverse-set (char-code char))))
-                   (if (= result 255)
-                       (error "Invalid input - ~s is not a base-64 character" char)
-                       result))
-                 0)))
-      (declare (inline next-char char-to-digit))
-      (the (values positive-fixnum positive-fixnum)
-           (loop
-              with padded = nil
-              for i1-begin of-type positive-fixnum = i1
-              for i2-begin of-type positive-fixnum = i2
-              for c1 of-type (or null character) = (next-char)
-              for c2 of-type (or null character) = (next-char)
-              for c3 of-type (or null character) = (next-char)
-              for c4 of-type (or null character) = (next-char)
-              for d1 of-type (unsigned-byte 8)   = (char-to-digit c1)
-              for d2 of-type (unsigned-byte 8)   = (char-to-digit c2)
-              for d3 of-type (unsigned-byte 8)   = (char-to-digit c3)
-              for d4 of-type (unsigned-byte 8)   = (char-to-digit c4)
-              for lb of-type (unsigned-byte 24)  = (logior (ash d1 18)
-                                                           (ash d2 12)
-                                                           (ash d3 6)
-                                                           d4)
-              for encode-group = (and c4 (<= (+ i2 3) end2))
-              if encode-group
-              do (setf (aref bytes i2)       (ash lb -16)
-                       (aref bytes (+ i2 1)) (logand #xff (ash lb -8))
-                       (aref bytes (+ i2 2)) (logand #xff lb)
-                       i2 (+ i2 3)
-                       padded (char= +pad-char+ c4))
-              unless padded
-                do (when (or (char= c1 +pad-char+)
-                             (char= c2 +pad-char+)
-                             (char= c3 +pad-char+))
-                     (error "Unexpected padding characters in input"))
-              while (and encode-group (< i1 end1) (not padded))
-              finally
-                 (check-correct-padding c1 c2 c3 c4)
-                 (return (values (if encode-group i1 i1-begin)
-                                 (cond ((not encode-group) i2-begin)
-                                       ((char= +pad-char+ c3) (+ i2-begin 1))
-                                       ((char= +pad-char+ c4) (+ i2-begin 2))
-                                       (t i2)))))))))
+               with padded = nil
+               for i1-begin of-type positive-fixnum = i1
+               for i2-begin of-type positive-fixnum = i2
+               for c1 of-type (or null character) = (next-char)
+               for c2 of-type (or null character) = (next-char)
+               for c3 of-type (or null character) = (next-char)
+               for c4 of-type (or null character) = (next-char)
+               for d1 of-type (unsigned-byte 8)   = (char-to-digit c1)
+               for d2 of-type (unsigned-byte 8)   = (char-to-digit c2)
+               for d3 of-type (unsigned-byte 8)   = (char-to-digit c3)
+               for d4 of-type (unsigned-byte 8)   = (char-to-digit c4)
+               for lb of-type (unsigned-byte 24)  = (logior (ash d1 18)
+                                                            (ash d2 12)
+                                                            (ash d3 6)
+                                                            d4)
+               for encode-group = (and c4 (<= (+ i2 3) end2))
+               if encode-group
+                 do (setf (aref bytes i2)       (ash lb -16)
+                          (aref bytes (+ i2 1)) (logand #xff (ash lb -8))
+                          (aref bytes (+ i2 2)) (logand #xff lb)
+                          i2 (+ i2 3)
+                          padded (char= +pad-char+ c4))
+               unless padded
+                 do (when (or (char= c1 +pad-char+)
+                              (char= c2 +pad-char+)
+                              (char= c3 +pad-char+))
+                      (error "Unexpected padding characters in input"))
+               while (and encode-group (< i1 end1) (not padded))
+               finally
+                  (check-correct-padding c1 c2 c3 c4)
+                  (return (values (if encode-group i1 i1-begin)
+                                  (cond ((not encode-group) i2-begin)
+                                        ((char= +pad-char+ c3) (+ i2-begin 1))
+                                        ((char= +pad-char+ c4) (+ i2-begin 2))
+                                        (t i2))))))))))
 
 (defstruct (decoder
              (:constructor %make-decoder))
