@@ -188,17 +188,44 @@ achieve good performance. Consequently,
 * Max length of the string that is used as encoding output or decoding
   input should never exceed `+MAX-STRING-LENGTH+`.
 
+* When using `:use-qbase64-sse2`, the decoder will not accept whitespace.
+
 ## Performance
 
-See [this page](https://github.com/chaitanyagupta/qbase64/wiki/Benchmarks-vs-other-CL-libraries)
-for CPU and memory benchmarks vs other CL libraries.
+A short test program can be used to test the throughput of qbase64.
+
+When SSE2 is enabled, the encoder and decoder approach one cycle per byte:
+
+```lisp
+CL-USER> (defvar *input* (make-array 1048576 :element-type '(unsigned-byte 8)))
+CL-USER> (loop for n below 1048576
+               do (setf (aref *input* n) (random 256)))
+CL-USER> (let ((str (make-string (ceiling (length *input*) 3/4) :element-type 'base-char)))
+           (the-cost-of-nothing:bench (qbase64:encode (qbase64:make-encoder) *input* str)))
+329.23 microseconds
+CL-USER> (/ 1048576 329.23e-6)
+3.1849344e9 ; bytes per second
+```
+
+With SSE2 disabled, the same test reports a runtime of 1.80 milliseconds, or
+a throughput of 582 megabytes per second.
 
 Encoding and decoding should be very fast under these conditions:
 
 * The byte vector is a `SIMPLE-ARRAY` of element type `(UNSIGNED-BYTE 8)`.
 
-* The string is a `SIMPLE-STRING`. Theoretically `SIMPLE-BASE-STRING`
-  could be even faster.
+* The string is a `SIMPLE-STRING`.
+  
+Encoding and decoding should be very very fast under further conditions:
+
+* The string is a `SIMPLE-BASE-STRING` (so that we can pick up 16 characters
+  in one load operation).
+  
+* `:start2` is zero, and `:end2` is the end of the output buffer. (Though
+  it wouldn't be hard to lift these limits.)
+  
+* The scheme is `:original` (unless you want to re-derive the encoder and
+  decoder stuff for the URI digit set).
 
 That said, these are just the optimal conditions. You can safely use
 any `STRING` or `VECTOR` with qbase64 if needed.
