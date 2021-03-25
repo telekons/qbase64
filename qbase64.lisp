@@ -69,6 +69,20 @@
   (declare (type scheme scheme))
   (declare (type positive-fixnum start1 end1 start2 end2))
   (declare (optimize (speed 3) (safety 0) (space 0)))
+  #+use-qbase64-sse2
+  (when (and (eq scheme :original)
+             (zerop start2)
+             (= end2 (length string))
+             (typep string 'simple-base-string)
+             (typep bytes  '(simple-array (unsigned-byte 8) 1)))
+    (let ((sse2-end (* 12 (floor end1 12))))
+      (when (>= sse2-end (- end1 12))
+        ;; Make sure we aren't going to try to process the end of the string.
+        (decf sse2-end 12))
+      (when (plusp sse2-end)
+        (%sse2-encode bytes string start1 sse2-end))
+      (setf start1 sse2-end
+            start2 (* 4 (floor sse2-end 3)))))
   (let ((set (ecase scheme
                (:original +original-set+)
                (:uri +uri-set+))))
@@ -416,6 +430,8 @@ CLOSE is invoked."))
 
 (defun check-correct-padding (c1 c2 c3 c4)
   "Check that only a suffix of the string has padding characters, and the suffix is entirely padding."
+  (when (or (null c1) (null c2) (null c3) (null c4))
+    (return-from check-correct-padding))
   (when (char= c4 c3 c2 c1 +pad-char+)
     (error "Unnecessary padding"))
   (let ((padding? t))
@@ -441,6 +457,20 @@ CLOSE is invoked."))
   (declare (type scheme scheme)
            (type positive-fixnum start1 end1 start2 end2))
   (declare (optimize (speed 3) (safety 0) (space 0)))
+  #+use-qbase64-sse2
+  (when (and (eq scheme :original)
+             (zerop start2)
+             (= end2 (length bytes))
+             (typep string 'simple-base-string)
+             (typep bytes  '(simple-array (unsigned-byte 8) 1)))
+    (let ((sse2-end (* 16 (floor end1 16))))
+      (when (>= sse2-end (- end1 16))
+        ;; Make sure we aren't going to try to process the end of the string.
+        (decf sse2-end 16))
+      (when (plusp sse2-end)
+        (%sse2-decode string bytes start1 sse2-end))
+      (setf start1 sse2-end
+            start2 (* 3 (/ sse2-end 4)))))
   (let* ((reverse-set (ecase scheme
                         (:original +original-reverse-set+)
                         (:uri +uri-reverse-set+)))

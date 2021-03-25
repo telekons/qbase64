@@ -6,10 +6,11 @@
   :author "Chaitanya Gupta <mail@chaitanyagupta.com>"
   :license "BSD-3-Clause"
   :serial t
-  :depends-on ("trivial-gray-streams" "metabang-bind")
+  :depends-on ("trivial-gray-streams" "metabang-bind" (:feature :use-qbase64-sse2 "cl-simd"))
   :components ((:file "package")
                (:file "utils")
                (:file "stream-utils")
+               (:file "sse2" :if-feature :use-qbase64-sse2)
                (:file "qbase64")))
 
 (asdf:defsystem "qbase64/test"

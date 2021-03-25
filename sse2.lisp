@@ -17,23 +17,21 @@
          (result (sse:shuffle-pi8 +encode-shift-lut+ result)))
     (sse:add-pi8 result input)))
 
-(deftype array-index ()
-  `(and unsigned-byte fixnum))
-
-(defun %sse2-encode (input output)
+(defun %sse2-encode (input output start end)
   (declare ((simple-array (unsigned-byte 8) 1) input)
            (simple-base-string output)
            (optimize (speed 3) (safety 0)))
-  (let ((bytes (length input))
-        ;; A simple-base-string on SBCL stores one character per byte.
+  ;; A simple-base-string on SBCL stores one character per byte.
+  (let ((input-storage (sb-sys:vector-sap input))
         (output-storage (sb-sys:vector-sap output))
         (shuf (sse:set-pi8 10 11 9 10
                            7 8 6 7
                            4 5 3 4
                            1 2 0 1)))
-    (loop for i of-type array-index below bytes by 12
-          for output-position of-type array-index from 0 by 16
-          do (let* ((raw-in (sse:aref-pi input i))
+    (loop for i of-type positive-fixnum from start below end by 12
+          for output-position of-type positive-fixnum from 0 by 16
+          do (print i)
+             (let* ((raw-in (sse:mem-ref-pi input-storage i))
                     (in (sse:shuffle-pi8 raw-in shuf))
                     (t0 (sse:and-pi     in (sse:set1-pi32 #x0fc0fc00)))
                     (t1 (sse:mulhi-pu16 t0 (sse:set1-pi32 #x04000040)))
@@ -94,15 +92,14 @@
   (let ((merge-ab-and-bc (sse:maddubs-pi16 vals (sse:set1-pi32 #x01400140))))
     (sse:madd-pi16 merge-ab-and-bc (sse:set1-pi32 #x00011000))))
 
-(defun %sse2-decode (input output)
+(defun %sse2-decode (input output start end)
   (declare ((simple-array (unsigned-byte 8) 1) output)
            (simple-base-string input))
   (let ((input-storage  (sb-sys:vector-sap input))
         (output-storage (sb-sys:vector-sap output))
-        (size (length input))
         (shuf (sse:setr-pi8 2 1 0 6 5 4 10 9 8 14 13 12 #xff #xff #xff #xff)))
-    (loop for i of-type array-index below size by 16
-          for out of-type array-index from 0 by 12
+    (loop for i of-type positive-fixnum from start below end by 16
+          for out of-type positive-fixnum from 0 by 12
           do (let* ((in       (sse:mem-ref-pi input-storage i))
                     (vals     (decode-lookup in i))
                     (merged   (decode-pack vals))
