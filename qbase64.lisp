@@ -391,7 +391,8 @@ CLOSE is invoked."))
   (defun reverse-set (set)
     (let ((array (make-array 128
                              :element-type '(unsigned-byte 8)
-                             :initial-element 0)))
+                             :initial-element 255)))
+      (setf (aref array (char-code +pad-char+)) 0)
       (loop
          for i upfrom 0
          for char across set
@@ -412,6 +413,19 @@ CLOSE is invoked."))
   (or (char= c #\Newline) (char= c #\Space)
       (char= c #\Linefeed) (char= c #\Return)
       (char= c #\Tab)))
+
+(defun check-correct-padding (c1 c2 c3 c4)
+  "Check that only a suffix of the string has padding characters, and the suffix is entirely padding."
+  (when (char= c4 c3 c2 c1 +pad-char+)
+    (error "Unnecessary padding"))
+  (let ((padding? t))
+    (macrolet ((check (place)
+                 `(if (char= ,place +pad-char+)
+                      (unless padding? (error "Invalid padding"))
+                      (when padding? (setf padding? nil)))))
+      (check c3)
+      (check c2)
+      (check c1))))
 
 (defun/td %decode (string bytes &key
                           (scheme :original)
@@ -442,7 +456,12 @@ CLOSE is invoked."))
                 finally (return char)))
            (char-to-digit (char)
              (declare (type (or null character) char))
-             (if char (aref reverse-set (char-code char)) 0)))
+             (if char
+                 (let ((result (aref reverse-set (char-code char))))
+                   (if (= result 255)
+                       (error "Invalid input - ~s is not a base-64 character" char)
+                       result))
+                 0)))
       (declare (inline next-char char-to-digit))
       (the (values positive-fixnum positive-fixnum)
            (loop
@@ -468,13 +487,19 @@ CLOSE is invoked."))
                        (aref bytes (+ i2 2)) (logand #xff lb)
                        i2 (+ i2 3)
                        padded (char= +pad-char+ c4))
+              unless padded
+                do (when (or (char= c1 +pad-char+)
+                             (char= c2 +pad-char+)
+                             (char= c3 +pad-char+))
+                     (error "Unexpected padding characters in input"))
               while (and encode-group (< i1 end1) (not padded))
               finally
-                (return (values (if encode-group i1 i1-begin)
-                                (cond ((not encode-group) i2-begin)
-                                      ((char= +pad-char+ c3) (+ i2-begin 1))
-                                      ((char= +pad-char+ c4) (+ i2-begin 2))
-                                      (t i2)))))))))
+                 (check-correct-padding c1 c2 c3 c4)
+                 (return (values (if encode-group i1 i1-begin)
+                                 (cond ((not encode-group) i2-begin)
+                                       ((char= +pad-char+ c3) (+ i2-begin 1))
+                                       ((char= +pad-char+ c4) (+ i2-begin 2))
+                                       (t i2)))))))))
 
 (defstruct (decoder
              (:constructor %make-decoder))
